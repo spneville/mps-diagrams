@@ -1214,7 +1214,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Tensor Network Diagram Editor")
-        self.resize(1100, 700)
+        self.resize(1400, 700)
 
         # Scene & View
         self.scene = TensorScene(self)
