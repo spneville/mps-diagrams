@@ -66,6 +66,10 @@ python mps_diagrams.py
 
 Tensors automatically snap together when their opposing legs are placed close enough. Connected legs maintain a constant bond length. Boundary tensor legs are spaced to align with the three rows of an MPS-MPO-MPS layout.
 
+### Saving and Loading
+
+Diagrams can be saved and loaded using the `.mpsd` file format (or alternatively `.json`). Use Ctrl+S to save and the load button to open a previously saved diagram.
+
 ### Export
 
 Diagrams can be exported as PNG, JPEG, SVG, or PDF via the toolbar save button or Ctrl+Shift+S.
