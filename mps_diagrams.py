@@ -5,6 +5,7 @@ Interactive GUI for building MPS/MPO tensor network diagrams.
 """
 
 import sys
+import json
 import math
 from abc import ABC, abstractmethod
 from enum import Enum, auto
@@ -13,7 +14,7 @@ from PySide6.QtWidgets import (
     QGraphicsItem, QGraphicsEllipseItem, QGraphicsRectItem,
     QGraphicsLineItem, QToolBar, QToolButton, QButtonGroup,
     QWidget, QVBoxLayout, QStatusBar, QGraphicsPathItem,
-    QColorDialog, QFileDialog,
+    QColorDialog, QFileDialog, QMenu,
 )
 from PySide6.QtCore import Qt, QPointF, QRectF, QLineF
 from PySide6.QtGui import (
@@ -227,6 +228,8 @@ class ToolMode(Enum):
     SELECT = auto()
     MPS = auto()
     MPO = auto()
+    MPS_LEFT = auto()
+    MPS_RIGHT = auto()
     BOUNDARY_LEFT = auto()
     BOUNDARY_RIGHT = auto()
 
@@ -291,6 +294,11 @@ class TensorItem(QGraphicsItem):
 
     def _draw_shape(self, painter: QPainter):
         raise NotImplementedError
+
+    def surface_point(self, leg: "Leg") -> QPointF:
+        """Return the point on the tensor body surface where the leg visually connects.
+        Defaults to leg.offset. Subclasses can override for non-rectangular shapes."""
+        return leg.offset
 
     # -- leg line management ---------------------------------------------------
     def _build_leg_lines(self):
@@ -435,6 +443,139 @@ class MPSSiteTensor(TensorItem):
 
 
 # ---------------------------------------------------------------------------
+# Left-Orthogonal MPS Site Tensor — right-pointing triangle with 3 legs
+# ---------------------------------------------------------------------------
+
+class LeftOrthoMPSTensor(TensorItem):
+    def __init__(self, parent=None):
+        r = TENSOR_RADIUS
+        legs = [
+            Leg(Direction.LEFT,  QPointF(-r, 0)),
+            Leg(Direction.RIGHT, QPointF(r, 0)),
+            Leg(Direction.DOWN,  QPointF(0, r)),
+        ]
+        super().__init__(legs, parent)
+        self.color = QColor(COLOR_MPS)
+
+    def _shape_rect(self) -> QRectF:
+        r = TENSOR_RADIUS
+        return QRectF(-r, -r, 2 * r, 2 * r)
+
+    def surface_point(self, leg):
+        """Return the point on the triangle surface where the leg connects."""
+        r = TENSOR_RADIUS
+        # Bottom edge runs from (-r, r) to (r, 0)
+        # At x=0: y = r/2
+        if leg.direction == Direction.DOWN:
+            return QPointF(leg.offset.x(), r / 2)
+        # Top edge runs from (-r, -r) to (r, 0)
+        # At x=0: y = -r/2
+        if leg.direction == Direction.UP:
+            return QPointF(leg.offset.x(), -r / 2)
+        return leg.offset
+
+    def _update_leg_lines(self):
+        for leg in self.legs:
+            if leg.line_item is None:
+                continue
+            if leg.connected_to is not None:
+                leg.line_item.setVisible(False)
+                continue
+            leg.line_item.setVisible(True)
+            base = self.surface_point(leg)
+            # tip stays at the same position as standard MPS: offset + LEG_LENGTH
+            dx, dy = 0.0, 0.0
+            if leg.direction == Direction.UP:
+                dy = -LEG_LENGTH
+            elif leg.direction == Direction.DOWN:
+                dy = LEG_LENGTH
+            elif leg.direction == Direction.LEFT:
+                dx = -LEG_LENGTH
+            elif leg.direction == Direction.RIGHT:
+                dx = LEG_LENGTH
+            tip = QPointF(leg.offset.x() + dx, leg.offset.y() + dy)
+            leg.line_item.setLine(QLineF(base, tip))
+            leg.line_item.setPen(QPen(COLOR_LEG, 2.5))
+
+    def _draw_shape(self, painter: QPainter):
+        r = TENSOR_RADIUS
+        painter.setPen(QPen(self.color.darker(130), 2))
+        painter.setBrush(QBrush(self.color))
+        triangle = QPainterPath()
+        triangle.moveTo(-r, -r)       # top-left
+        triangle.lineTo(r, 0)         # right (point)
+        triangle.lineTo(-r, r)        # bottom-left
+        triangle.closeSubpath()
+        painter.drawPath(triangle)
+
+
+# ---------------------------------------------------------------------------
+# Right-Orthogonal MPS Site Tensor — left-pointing triangle with 3 legs
+# ---------------------------------------------------------------------------
+
+class RightOrthoMPSTensor(TensorItem):
+    def __init__(self, parent=None):
+        r = TENSOR_RADIUS
+        legs = [
+            Leg(Direction.LEFT,  QPointF(-r, 0)),
+            Leg(Direction.RIGHT, QPointF(r, 0)),
+            Leg(Direction.DOWN,  QPointF(0, r)),
+        ]
+        super().__init__(legs, parent)
+        self.color = QColor(COLOR_MPS)
+
+    def _shape_rect(self) -> QRectF:
+        r = TENSOR_RADIUS
+        return QRectF(-r, -r, 2 * r, 2 * r)
+
+    def surface_point(self, leg):
+        """Return the point on the triangle surface where the leg connects."""
+        r = TENSOR_RADIUS
+        # Bottom edge runs from (r, r) to (-r, 0)
+        # At x=0: y = r/2
+        if leg.direction == Direction.DOWN:
+            return QPointF(leg.offset.x(), r / 2)
+        # Top edge runs from (r, -r) to (-r, 0)
+        # At x=0: y = -r/2
+        if leg.direction == Direction.UP:
+            return QPointF(leg.offset.x(), -r / 2)
+        return leg.offset
+
+    def _update_leg_lines(self):
+        for leg in self.legs:
+            if leg.line_item is None:
+                continue
+            if leg.connected_to is not None:
+                leg.line_item.setVisible(False)
+                continue
+            leg.line_item.setVisible(True)
+            base = self.surface_point(leg)
+            dx, dy = 0.0, 0.0
+            if leg.direction == Direction.UP:
+                dy = -LEG_LENGTH
+            elif leg.direction == Direction.DOWN:
+                dy = LEG_LENGTH
+            elif leg.direction == Direction.LEFT:
+                dx = -LEG_LENGTH
+            elif leg.direction == Direction.RIGHT:
+                dx = LEG_LENGTH
+            tip = QPointF(leg.offset.x() + dx, leg.offset.y() + dy)
+            leg.line_item.setLine(QLineF(base, tip))
+            leg.line_item.setPen(QPen(COLOR_LEG, 2.5))
+
+    def _draw_shape(self, painter: QPainter):
+        r = TENSOR_RADIUS
+        painter.setPen(QPen(self.color.darker(130), 2))
+        painter.setBrush(QBrush(self.color))
+        triangle = QPainterPath()
+        triangle.moveTo(r, -r)        # top-right
+        triangle.lineTo(-r, 0)        # left (point)
+        triangle.lineTo(r, r)         # bottom-right
+        triangle.closeSubpath()
+        painter.drawPath(triangle)
+
+
+# ---------------------------------------------------------------------------
 # MPO Site Tensor — square with 4 legs (left, right, up, down)
 # ---------------------------------------------------------------------------
 
@@ -517,9 +658,9 @@ class ConnectionLine(QGraphicsLineItem):
         self.update_position()
 
     def update_position(self):
-        # draw from body surface to body surface (leg offsets)
-        p1 = self.tensor_a.scenePos() + self.leg_a.offset
-        p2 = self.tensor_b.scenePos() + self.leg_b.offset
+        # draw from body surface to body surface
+        p1 = self.tensor_a.scenePos() + self.tensor_a.surface_point(self.leg_a)
+        p2 = self.tensor_b.scenePos() + self.tensor_b.surface_point(self.leg_b)
         self.setLine(QLineF(p1, p2))
 
 
@@ -535,6 +676,7 @@ class TensorScene(QGraphicsScene):
         self._snap_indicator: QGraphicsEllipseItem | None = None
         self.undo_stack = UndoStack()
         self._exporting = False
+        self.selection_order: list[TensorItem] = []  # tracks order of selection
 
     # -- grid ----------------------------------------------------------------
     def drawBackground(self, painter: QPainter, rect: QRectF):
@@ -732,6 +874,7 @@ class TensorView(QGraphicsView):
         self._panning = False
         self._pan_start = QPointF()
         self._dragging_tensor = False
+        self._drag_group: set[TensorItem] = set()
         self._drag_start_positions: list[tuple[TensorItem, QPointF]] = []
         self._drag_start_connections: set[tuple[int, int]] = set()
         self._clipboard: list[tuple[type, str | None, QPointF, list[tuple[Direction, QPointF]], QColor]] = []
@@ -775,10 +918,26 @@ class TensorView(QGraphicsView):
             # Select mode: click on tensor = drag tensor, click on empty = pan
             hit = self._tensor_at(event.position())
             if hit is not None:
+                shift_held = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
                 # record positions and connections before dragging for undo
                 self._dragging_tensor = True
-                self._drag_start_positions = []
                 group = hit.connected_group()
+                scene_obj = self.scene()
+                # Track selection order
+                if isinstance(scene_obj, TensorScene):
+                    if shift_held:
+                        # Add to existing selection and append new tensors to order
+                        for item in scene_obj.selectedItems():
+                            if isinstance(item, TensorItem):
+                                group.add(item)
+                        for t in group:
+                            if t not in scene_obj.selection_order:
+                                scene_obj.selection_order.append(t)
+                    else:
+                        # Replace selection order with this group
+                        scene_obj.selection_order = list(group)
+                self._drag_group = group
+                self._drag_start_positions = []
                 for t in group:
                     self._drag_start_positions.append((t, QPointF(t.pos())))
                 # snapshot current connections involving dragged tensors
@@ -789,12 +948,16 @@ class TensorView(QGraphicsView):
                         if conn.tensor_a in group or conn.tensor_b in group:
                             self._drag_start_connections.add(
                                 (id(conn.leg_a), id(conn.leg_b)))
+                # Call super for drag setup, then select entire group
                 super().mousePressEvent(event)
+                for t in group:
+                    t.setSelected(True)
             else:
                 # deselect and pan the canvas
                 scene = self.scene()
                 if isinstance(scene, TensorScene):
                     scene.clearSelection()
+                    scene.selection_order.clear()
                 self._panning = True
                 self._pan_start = event.position()
                 self.setCursor(Qt.CursorShape.ClosedHandCursor)
@@ -814,6 +977,11 @@ class TensorView(QGraphicsView):
             )
             return
         super().mouseMoveEvent(event)
+        # Re-apply group selection after super (Qt resets selection during drag)
+        if self._dragging_tensor and self._drag_group:
+            for t in self._drag_group:
+                if not t.isSelected():
+                    t.setSelected(True)
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MouseButton.MiddleButton and self._panning:
@@ -886,7 +1054,14 @@ class TensorView(QGraphicsView):
                 self._drag_start_connections = set()
                 self._dragging_tensor = False
 
+        release_group = self._drag_group
+        self._drag_group = set()
         super().mouseReleaseEvent(event)
+
+        # After super processes the release, re-apply group selection
+        if event.button() == Qt.MouseButton.LeftButton and release_group:
+            for t in release_group:
+                t.setSelected(True)
 
     def wheelEvent(self, event):
         factor = 1.15
@@ -1009,6 +1184,10 @@ class TensorView(QGraphicsView):
         tensor: TensorItem | None = None
         if self._tool_mode == ToolMode.MPS:
             tensor = MPSSiteTensor()
+        elif self._tool_mode == ToolMode.MPS_LEFT:
+            tensor = LeftOrthoMPSTensor()
+        elif self._tool_mode == ToolMode.MPS_RIGHT:
+            tensor = RightOrthoMPSTensor()
         elif self._tool_mode == ToolMode.MPO:
             tensor = MPOSiteTensor()
         elif self._tool_mode == ToolMode.BOUNDARY_LEFT:
@@ -1075,6 +1254,8 @@ class MainWindow(QMainWindow):
         select_btn.setChecked(True)
 
         make_btn("\u25CB MPS", ToolMode.MPS, "MPS site tensor: circle with 3 legs (M)")
+        make_btn("\u25B7 MPS-L", ToolMode.MPS_LEFT, "Left-orthogonal MPS: right-pointing triangle (A)")
+        make_btn("\u25C1 MPS-R", ToolMode.MPS_RIGHT, "Right-orthogonal MPS: left-pointing triangle (B)")
         make_btn("\u25A1 MPO", ToolMode.MPO, "MPO site tensor: square with 4 legs (O)")
         make_btn("\u25B6| Left", ToolMode.BOUNDARY_LEFT, "Left boundary tensor (L)")
         make_btn("|\u25C0 Right", ToolMode.BOUNDARY_RIGHT, "Right boundary tensor (R)")
@@ -1082,7 +1263,7 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
 
         rotate_ccw_btn = QToolButton()
-        rotate_ccw_btn.setText("\u21B6 CCW")
+        rotate_ccw_btn.setText("\u21B6")
         rotate_ccw_btn.setToolTip("Rotate selected 90° counter-clockwise ([)")
         rotate_ccw_btn.setMinimumWidth(70)
         font = rotate_ccw_btn.font()
@@ -1092,7 +1273,7 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(rotate_ccw_btn)
 
         rotate_cw_btn = QToolButton()
-        rotate_cw_btn.setText("\u21B7 CW")
+        rotate_cw_btn.setText("\u21B7")
         rotate_cw_btn.setToolTip("Rotate selected 90° clockwise (])")
         rotate_cw_btn.setMinimumWidth(70)
         font = rotate_cw_btn.font()
@@ -1115,25 +1296,78 @@ class MainWindow(QMainWindow):
 
         toolbar.addSeparator()
 
-        save_btn = QToolButton()
-        save_btn.setText("\U0001F4BE Save")
-        save_btn.setToolTip("Export diagram as image (Ctrl+Shift+S)")
-        save_btn.setMinimumWidth(80)
-        font = save_btn.font()
+        align_btn = QToolButton()
+        align_btn.setText("\u2261 Align")
+        align_btn.setToolTip("Align selected groups")
+        align_btn.setMinimumWidth(80)
+        font = align_btn.font()
         font.setPointSize(10)
-        save_btn.setFont(font)
-        save_btn.clicked.connect(self._save_image)
-        toolbar.addWidget(save_btn)
+        align_btn.setFont(font)
+        align_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        align_menu = QMenu(self)
+        align_menu.addAction("Align Left Edges", lambda: self._align_selected("left"))
+        align_menu.addAction("Align Right Edges", lambda: self._align_selected("right"))
+        align_menu.addAction("Align Center Vertically", lambda: self._align_selected("center_v"))
+        align_menu.addSeparator()
+        align_menu.addAction("Align Top Edges", lambda: self._align_selected("top"))
+        align_menu.addAction("Align Bottom Edges", lambda: self._align_selected("bottom"))
+        align_menu.addAction("Align Center Horizontally", lambda: self._align_selected("center_h"))
+        align_btn.setMenu(align_menu)
+        toolbar.addWidget(align_btn)
 
-        save_action = QAction(self)
-        save_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
-        save_action.triggered.connect(self._save_image)
-        self.addAction(save_action)
+        toolbar.addSeparator()
+
+        file_save_btn = QToolButton()
+        file_save_btn.setText("Save")
+        file_save_btn.setToolTip("Save diagram to file (Ctrl+S)")
+        file_save_btn.setMinimumWidth(60)
+        font = file_save_btn.font()
+        font.setPointSize(10)
+        file_save_btn.setFont(font)
+        file_save_btn.clicked.connect(self._save_diagram)
+        toolbar.addWidget(file_save_btn)
+
+        file_load_btn = QToolButton()
+        file_load_btn.setText("Load")
+        file_load_btn.setToolTip("Load diagram from file (Ctrl+O)")
+        file_load_btn.setMinimumWidth(60)
+        font = file_load_btn.font()
+        font.setPointSize(10)
+        file_load_btn.setFont(font)
+        file_load_btn.clicked.connect(self._load_diagram)
+        toolbar.addWidget(file_load_btn)
+
+        export_btn = QToolButton()
+        export_btn.setText("Export")
+        export_btn.setToolTip("Export diagram as image (Ctrl+Shift+S)")
+        export_btn.setMinimumWidth(70)
+        font = export_btn.font()
+        font.setPointSize(10)
+        export_btn.setFont(font)
+        export_btn.clicked.connect(self._save_image)
+        toolbar.addWidget(export_btn)
+
+        save_file_action = QAction(self)
+        save_file_action.setShortcut(QKeySequence("Ctrl+S"))
+        save_file_action.triggered.connect(self._save_diagram)
+        self.addAction(save_file_action)
+
+        load_file_action = QAction(self)
+        load_file_action.setShortcut(QKeySequence("Ctrl+O"))
+        load_file_action.triggered.connect(self._load_diagram)
+        self.addAction(load_file_action)
+
+        export_action = QAction(self)
+        export_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
+        export_action.triggered.connect(self._save_image)
+        self.addAction(export_action)
 
         # keyboard shortcuts
         shortcuts = {
             Qt.Key.Key_S: ToolMode.SELECT,
             Qt.Key.Key_M: ToolMode.MPS,
+            Qt.Key.Key_A: ToolMode.MPS_LEFT,
+            Qt.Key.Key_B: ToolMode.MPS_RIGHT,
             Qt.Key.Key_O: ToolMode.MPO,
             Qt.Key.Key_L: ToolMode.BOUNDARY_LEFT,
             Qt.Key.Key_R: ToolMode.BOUNDARY_RIGHT,
@@ -1143,6 +1377,115 @@ class MainWindow(QMainWindow):
             action.setShortcut(key)
             action.triggered.connect(lambda checked, m=mode: self._set_mode(m))
             self.addAction(action)
+
+    # -- diagram file save/load ------------------------------------------------
+
+    _TYPE_MAP = {
+        "MPS": MPSSiteTensor,
+        "MPS_LEFT": LeftOrthoMPSTensor,
+        "MPS_RIGHT": RightOrthoMPSTensor,
+        "MPO": MPOSiteTensor,
+        "BOUNDARY": BoundaryTensor,
+    }
+    _TYPE_MAP_REV = {v: k for k, v in _TYPE_MAP.items()}
+
+    def _save_diagram(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Diagram", "", "MPS Diagram (*.mpsd);;JSON (*.json)")
+        if not path:
+            return
+
+        tensors = [item for item in self.scene.items() if isinstance(item, TensorItem)]
+        # Assign stable IDs for serialization
+        tensor_ids = {id(t): i for i, t in enumerate(tensors)}
+
+        tensor_data = []
+        for t in tensors:
+            type_name = self._TYPE_MAP_REV.get(type(t), "MPS")
+            entry = {
+                "id": tensor_ids[id(t)],
+                "type": type_name,
+                "x": t.pos().x(),
+                "y": t.pos().y(),
+                "color": t.color.name(),
+                "legs": [
+                    {"direction": leg.direction.name, "ox": leg.offset.x(), "oy": leg.offset.y()}
+                    for leg in t.legs
+                ],
+            }
+            if isinstance(t, BoundaryTensor):
+                entry["side"] = t.side
+            tensor_data.append(entry)
+
+        connection_data = []
+        for conn in self.scene.connections:
+            ta_id = tensor_ids.get(id(conn.tensor_a))
+            tb_id = tensor_ids.get(id(conn.tensor_b))
+            if ta_id is not None and tb_id is not None:
+                la_idx = conn.tensor_a.legs.index(conn.leg_a)
+                lb_idx = conn.tensor_b.legs.index(conn.leg_b)
+                connection_data.append({
+                    "tensor_a": ta_id, "leg_a": la_idx,
+                    "tensor_b": tb_id, "leg_b": lb_idx,
+                })
+
+        data = {"tensors": tensor_data, "connections": connection_data}
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2)
+        self.statusBar().showMessage(f"Diagram saved to {path}", 5000)
+
+    def _load_diagram(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Diagram", "", "MPS Diagram (*.mpsd);;JSON (*.json);;All Files (*)")
+        if not path:
+            return
+
+        with open(path, "r") as f:
+            data = json.load(f)
+
+        # Clear existing diagram
+        self.scene.clearSelection()
+        for conn in list(self.scene.connections):
+            self.scene._remove_connection(conn.leg_a, conn.leg_b)
+        for item in list(self.scene.items()):
+            if isinstance(item, TensorItem):
+                self.scene.removeItem(item)
+        self.scene.undo_stack = UndoStack()
+        self.scene.selection_order.clear()
+
+        # Recreate tensors
+        id_to_tensor: dict[int, TensorItem] = {}
+        for entry in data["tensors"]:
+            type_name = entry["type"]
+            cls = self._TYPE_MAP.get(type_name)
+            if cls is None:
+                continue
+            if cls is BoundaryTensor:
+                tensor = BoundaryTensor(entry.get("side", "left"))
+            else:
+                tensor = cls()
+            tensor.setPos(QPointF(entry["x"], entry["y"]))
+            tensor.color = QColor(entry["color"])
+            # Restore leg directions and offsets (preserves rotation)
+            for leg, leg_data in zip(tensor.legs, entry["legs"]):
+                leg.direction = Direction[leg_data["direction"]]
+                leg.offset = QPointF(leg_data["ox"], leg_data["oy"])
+            tensor._update_leg_lines()
+            self.scene.addItem(tensor)
+            id_to_tensor[entry["id"]] = tensor
+
+        # Recreate connections
+        for conn_data in data["connections"]:
+            ta = id_to_tensor.get(conn_data["tensor_a"])
+            tb = id_to_tensor.get(conn_data["tensor_b"])
+            if ta is not None and tb is not None:
+                la = ta.legs[conn_data["leg_a"]]
+                lb = tb.legs[conn_data["leg_b"]]
+                self.scene.add_connection(la, ta, lb, tb)
+
+        self.statusBar().showMessage(f"Diagram loaded from {path}", 5000)
+
+    # -- image export ----------------------------------------------------------
 
     def _save_image(self):
         path, selected_filter = QFileDialog.getSaveFileName(
@@ -1208,6 +1551,84 @@ class MainWindow(QMainWindow):
 
         self.statusBar().showMessage(f"Saved to {path}", 5000)
 
+    def _align_selected(self, mode: str):
+        """Align selected connected groups.
+        mode: 'left', 'right', 'top', 'bottom', 'center_h', 'center_v'."""
+        # Use selection order to determine the reference (first) group
+        ordered = self.scene.selection_order if self.scene.selection_order else [
+            item for item in self.scene.selectedItems() if isinstance(item, TensorItem)
+        ]
+        if not ordered:
+            return
+
+        # Partition into distinct connected groups, preserving selection order
+        visited: set[TensorItem] = set()
+        groups: list[set[TensorItem]] = []
+        for t in ordered:
+            if t not in visited:
+                group = t.connected_group()
+                groups.append(group)
+                visited.update(group)
+
+        if len(groups) < 2:
+            return
+
+        # Compute bounding box for each group
+        def group_bbox(group):
+            xs, ys = [], []
+            for t in group:
+                r = t._shape_rect()
+                xs.append(t.pos().x() + r.left())
+                xs.append(t.pos().x() + r.right())
+                ys.append(t.pos().y() + r.top())
+                ys.append(t.pos().y() + r.bottom())
+            return min(xs), max(xs), min(ys), max(ys)
+
+        bboxes = [group_bbox(g) for g in groups]
+
+        # Compute the target value based on the first group (reference)
+        ref = bboxes[0]
+        ref_left, ref_right, ref_top, ref_bottom = ref
+
+        # Compute delta for each group (skip the first — it's the reference)
+        all_old = []
+        all_new = []
+        for group, (g_left, g_right, g_top, g_bottom) in zip(groups[1:], bboxes[1:]):
+            dx, dy = 0.0, 0.0
+            if mode == "left":
+                dx = ref_left - g_left
+            elif mode == "right":
+                dx = ref_right - g_right
+            elif mode == "center_v":
+                ref_cx = (ref_left + ref_right) / 2
+                g_cx = (g_left + g_right) / 2
+                dx = ref_cx - g_cx
+            elif mode == "top":
+                dy = ref_top - g_top
+            elif mode == "bottom":
+                dy = ref_bottom - g_bottom
+            elif mode == "center_h":
+                ref_cy = (ref_top + ref_bottom) / 2
+                g_cy = (g_top + g_bottom) / 2
+                dy = ref_cy - g_cy
+
+            if dx == 0 and dy == 0:
+                continue
+            delta = QPointF(dx, dy)
+            # Guard against itemChange triggering recursive group movement
+            for t in group:
+                all_old.append((t, QPointF(t.pos())))
+                t._moving_group = True
+            for t in group:
+                t.setPos(t.pos() + delta)
+            for t in group:
+                t._moving_group = False
+                all_new.append((t, QPointF(t.pos())))
+
+        if all_old:
+            self.scene.undo_stack.push(MoveAction(
+                self.scene, all_old, all_new, [], []))
+
     def _change_color(self):
         tensors = [item for item in self.scene.selectedItems() if isinstance(item, TensorItem)]
         if not tensors:
@@ -1240,6 +1661,8 @@ class MainWindow(QMainWindow):
         labels = {
             ToolMode.SELECT: "Select mode — click to select, drag to move",
             ToolMode.MPS: "MPS mode — click to place MPS site tensor (circle, 3 legs)",
+            ToolMode.MPS_LEFT: "Left-orthogonal MPS mode — click to place right-pointing triangle (3 legs)",
+            ToolMode.MPS_RIGHT: "Right-orthogonal MPS mode — click to place left-pointing triangle (3 legs)",
             ToolMode.MPO: "MPO mode — click to place MPO site tensor (square, 4 legs)",
             ToolMode.BOUNDARY_LEFT: "Left boundary mode — click to place left boundary tensor",
             ToolMode.BOUNDARY_RIGHT: "Right boundary mode — click to place right boundary tensor",
@@ -1247,8 +1670,8 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(labels.get(mode, ""))
         # update button checked state
         buttons = self._tool_group.buttons()
-        modes = [ToolMode.SELECT, ToolMode.MPS, ToolMode.MPO,
-                 ToolMode.BOUNDARY_LEFT, ToolMode.BOUNDARY_RIGHT]
+        modes = [ToolMode.SELECT, ToolMode.MPS, ToolMode.MPS_LEFT, ToolMode.MPS_RIGHT,
+                 ToolMode.MPO, ToolMode.BOUNDARY_LEFT, ToolMode.BOUNDARY_RIGHT]
         for btn, m in zip(buttons, modes):
             btn.setChecked(m == mode)
 
